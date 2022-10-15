@@ -1,6 +1,10 @@
 use std::str;
 use std::io::BufRead;
+use std::io::Seek;
+use std::io::Read;
+use std::io::Write;
 use std::io::BufReader;
+use std::io::SeekFrom;
 use std::fs::File;
 use std::process;
 
@@ -27,7 +31,8 @@ fn main() {
     let xml = File::open(&args.xml_path).unwrap();
     let xml = BufReader::new(xml);
 
-    emit_write_event_for_each_read_event( xml, args.count, &args.nesting );
+    copy_plain_xml_text_for_each_item( &args.xml_path, &args.count, &args.nesting );
+    //emit_write_event_for_each_read_event( xml, args.count, &args.nesting );
 
     process::exit(0);
 }
@@ -120,6 +125,87 @@ fn emit_write_event_for_each_read_event(xml: impl BufRead, max_items: i32, nesti
             }
 
             _ => (),
+        }
+        buf.clear();
+    }
+}
+
+
+fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &i32, nesting: &String) {
+    let mut xml_copy = File::open(&xml_path).unwrap();
+    // Also see:
+    // https://rust-lang-nursery.github.io/rust-cookbook/file/read-write.html#access-a-file-randomly-using-a-memory-map
+
+    let xml = File::open(&xml_path).unwrap();
+    let xml = BufReader::new(xml);
+
+    let root   = root_from_nesting(&nesting);
+    let parent = parent_from_nesting(&nesting);
+
+    let start = BytesStart::new(&parent);
+    let end   = start.to_end().into_owned();
+
+    let mut chunk_path = String::from("/dev/null");
+    let mut chunk_file = File::open(chunk_path).unwrap();
+    let mut reader = Reader::from_reader(xml);
+
+    let items_per_chunk = max_items;
+    let mut last_event_pos = 0;
+    let mut chunk_id = 0;
+    let mut item_id = 0;
+    let mut item_chunk_id = 0;
+    let mut inside_item = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Err(e) => panic!("Error at position {}: {:?}", reader.buffer_position(), e),
+
+            Ok(Event::Eof) => break,
+
+            Ok(Event::Start(e)) => {
+                if str::from_utf8(e.name().as_ref()).unwrap().eq(&parent) {
+                    if item_chunk_id == 0 {
+                        chunk_path = format!("/tmp/feed.xml.{}", chunk_id);
+                        println!("Chunk: {}|{} - {}", chunk_id, item_id, chunk_path);
+                        chunk_file = File::create(chunk_path).unwrap();
+                        chunk_file.write_all(b"<jobs>").unwrap();
+                    }
+
+                    let current_event_pos = reader.buffer_position();
+                    //println!("<{}> at: {}-{}", parent, last_event_pos, current_event_pos);
+                    reader.read_to_end_into(end.name(), &mut buf).unwrap();
+
+                    let start_pos = last_event_pos;
+                    let end_pos   = reader.buffer_position();
+                    let mut buffer = vec![0u8; end_pos-start_pos];
+
+                    xml_copy.seek(SeekFrom::Start(start_pos as u64)).unwrap();
+                    xml_copy.read_exact(&mut buffer[..]).unwrap();
+                    //println!("{}", str::from_utf8(&buffer[..]).unwrap());
+                    chunk_file.write_all(&buffer[..]).unwrap();
+
+                    if item_chunk_id + 1 == *items_per_chunk {
+                        chunk_id += 1;
+                        item_chunk_id = 0;
+                        chunk_file.write_all(b"</jobs>").unwrap();
+                    }
+                    else {
+                        item_chunk_id += 1;
+                    }
+                    item_id += 1;
+                } else if str::from_utf8(e.name().as_ref()).unwrap().eq(&root) {
+                }
+
+                last_event_pos = reader.buffer_position();
+            }
+
+            Ok(Event::End(e)) => last_event_pos = reader.buffer_position(),
+
+            _ => {
+                last_event_pos = reader.buffer_position();
+                //println!("Event at: {}", last_event_pos);
+            }
         }
         buf.clear();
     }
