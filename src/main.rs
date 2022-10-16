@@ -130,7 +130,11 @@ fn emit_write_event_for_each_read_event(xml: impl BufRead, max_items: i32, nesti
     }
 }
 
-
+// TODO
+// * Copy XML header as is
+// * Move variables into struct
+// * Move functionality into struct impl
+// * Expose start/end byte of tag on sax API
 fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &i32, nesting: &String) {
     let mut xml_copy = File::open(&xml_path).unwrap();
     // Also see:
@@ -144,6 +148,8 @@ fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &
 
     let start = BytesStart::new(&parent);
     let end   = start.to_end().into_owned();
+
+    let mut header = vec![0u8; 1]; // need to initialise, else compiler complains...
 
     let mut chunk_path = String::from("/dev/null");
     let mut chunk_file = File::open(chunk_path).unwrap();
@@ -165,15 +171,22 @@ fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &
 
             Ok(Event::Start(e)) => {
                 if str::from_utf8(e.name().as_ref()).unwrap().eq(&parent) {
+                    if item_id == 0 {
+                        header = vec![0u8; last_event_pos];
+                        xml_copy.seek(SeekFrom::Start(0u64)).unwrap();
+                        xml_copy.read_exact(&mut header[..]).unwrap();
+                    }
+
                     if item_chunk_id == 0 {
                         chunk_path = format!("/tmp/feed.xml.{}", chunk_id);
                         println!("Chunk: {}|{} - {}", chunk_id, item_id, chunk_path);
                         chunk_file = File::create(chunk_path).unwrap();
-                        chunk_file.write_all(b"<jobs>").unwrap();
+                        chunk_file.write_all(&header[..]).unwrap();
                     }
 
                     let current_event_pos = reader.buffer_position();
                     //println!("<{}> at: {}-{}", parent, last_event_pos, current_event_pos);
+
                     reader.read_to_end_into(end.name(), &mut buf).unwrap();
 
                     let start_pos = last_event_pos;
