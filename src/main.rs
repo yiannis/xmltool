@@ -131,16 +131,23 @@ fn emit_write_event_for_each_read_event(xml: impl BufRead, max_items: i32, nesti
 }
 
 // TODO
-// * Copy XML header as is
 // * Move variables into struct
 // * Move functionality into struct impl
 // * Expose start/end byte of tag on sax API
 // * reader.buffer_position() returns usize.
 //   Shouldn't it return u64 to support big files?
+// * Use mmap:
+// https://rust-lang-nursery.github.io/rust-cookbook/file/read-write.html#access-a-file-randomly-using-a-memory-map
+// * Potential improvement:
+// const BUF_SIZE: usize = 4096; // 4kb at once
+// let mut buf = Vec::with_capacity(BUF_SIZE);
+// match xmlfile.read_event(&mut buf)? {
+//   See: https://usethe.computer/posts/14-xmhell.html
+// * XPath support:
+// - https://github.com/shepmaster/sxd-xpath
+// - https://github.com/ballsteve/xrust
 fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &i32, nesting: &String) {
     let mut xml_copy = File::open(&xml_path).unwrap();
-    // Also see:
-    // https://rust-lang-nursery.github.io/rust-cookbook/file/read-write.html#access-a-file-randomly-using-a-memory-map
 
     let xml = File::open(&xml_path).unwrap();
     let xml = BufReader::new(xml);
