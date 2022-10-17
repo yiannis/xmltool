@@ -135,6 +135,8 @@ fn emit_write_event_for_each_read_event(xml: impl BufRead, max_items: i32, nesti
 // * Move variables into struct
 // * Move functionality into struct impl
 // * Expose start/end byte of tag on sax API
+// * reader.buffer_position() returns usize.
+//   Shouldn't it return u64 to support big files?
 fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &i32, nesting: &String) {
     let mut xml_copy = File::open(&xml_path).unwrap();
     // Also see:
@@ -149,14 +151,15 @@ fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &
     let start = BytesStart::new(&parent);
     let end   = start.to_end().into_owned();
 
-    let mut header = vec![0u8; 1]; // need to initialise, else compiler complains...
+    let mut header = vec![0u8; 1]; // need to initialise here, else compiler complains...
 
     let mut chunk_path = String::from("/dev/null");
-    let mut chunk_file = File::open(chunk_path).unwrap();
+    let mut chunk_files: Vec<File> = Vec::new();
     let mut reader = Reader::from_reader(xml);
 
     let items_per_chunk = max_items;
     let mut last_event_pos = 0;
+    let mut last_item_pos: usize = 0;
     let mut chunk_id = 0;
     let mut item_id = 0;
     let mut item_chunk_id = 0;
@@ -167,7 +170,17 @@ fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &
         match reader.read_event_into(&mut buf) {
             Err(e) => panic!("Error at position {}: {:?}", reader.buffer_position(), e),
 
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                let size = (xml_copy.metadata().unwrap().len()-last_item_pos as u64) as usize;
+                let mut footer = vec![0u8; size];
+                xml_copy.seek(SeekFrom::Start(last_item_pos as u64)).unwrap();
+                xml_copy.read_exact(&mut footer[..]).unwrap();
+
+                for mut f in chunk_files.iter() {
+                    f.write_all(&footer[..]).unwrap();
+                }
+                break;
+            }
 
             Ok(Event::Start(e)) => {
                 if str::from_utf8(e.name().as_ref()).unwrap().eq(&parent) {
@@ -180,8 +193,10 @@ fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &
                     if item_chunk_id == 0 {
                         chunk_path = format!("/tmp/feed.xml.{}", chunk_id);
                         println!("Chunk: {}|{} - {}", chunk_id, item_id, chunk_path);
-                        chunk_file = File::create(chunk_path).unwrap();
-                        chunk_file.write_all(&header[..]).unwrap();
+                        let chunk_file = File::create(chunk_path).unwrap();
+                        chunk_files.push(chunk_file);
+
+                        chunk_files[chunk_id].write_all(&header[..]).unwrap();
                     }
 
                     let current_event_pos = reader.buffer_position();
@@ -193,21 +208,21 @@ fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &
                     let end_pos   = reader.buffer_position();
                     let mut buffer = vec![0u8; end_pos-start_pos];
 
+                    last_item_pos = end_pos;
+
                     xml_copy.seek(SeekFrom::Start(start_pos as u64)).unwrap();
                     xml_copy.read_exact(&mut buffer[..]).unwrap();
                     //println!("{}", str::from_utf8(&buffer[..]).unwrap());
-                    chunk_file.write_all(&buffer[..]).unwrap();
+                    chunk_files[chunk_id].write_all(&buffer[..]).unwrap();
 
                     if item_chunk_id + 1 == *items_per_chunk {
                         chunk_id += 1;
                         item_chunk_id = 0;
-                        chunk_file.write_all(b"</jobs>").unwrap();
                     }
                     else {
                         item_chunk_id += 1;
                     }
                     item_id += 1;
-                } else if str::from_utf8(e.name().as_ref()).unwrap().eq(&root) {
                 }
 
                 last_event_pos = reader.buffer_position();
@@ -222,9 +237,9 @@ fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: &
         }
         buf.clear();
     }
-}
 
-//                        println!("{}", reader.read_text(end.name()).unwrap());
+
+}
 
 //                    b"item" => println!("attributes values: {:#?}",
 //                                        e.attributes().map(|a| str::from_utf8(a.unwrap().key.into_inner()).unwrap())
