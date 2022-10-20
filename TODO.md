@@ -2,6 +2,27 @@
 
 ## XML Tools
 
+### Code
+ - [ ] Integration tests with several types of XML files
+ - [ ] Move structs, etc to external .rs file
+ - [ ] Update all code after linter
+ - [ ] Add unit tests
+ - [ ] Benchmarks using comtrya
+
+### Features
+
+- [ ] Add output path option
+- [ ] Preserve whitespace formatting
+- [ ] Read from .gz file
+- [ ] Convert to utf-8
+
+#### XPath support
+* Modules:
+ - https://github.com/shepmaster/sxd-xpath
+ - https://github.com/ballsteve/xrust
+* TODO:
+ - Match parent element with full nesting string
+
 ### Performance
 
 #### Use mmap
@@ -18,14 +39,6 @@ match xmlfile.read_event(&mut buf)? {
 ```
 See: https://usethe.computer/posts/14-xmhell.html
 
-### Features
-
-#### XPath support
-See:
-- https://github.com/shepmaster/sxd-xpath
-- https://github.com/ballsteve/xrust
-
-#### Read from .gz file
 
 ## External
 
