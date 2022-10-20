@@ -1,0 +1,9 @@
+<books>
+  <book isbn="123">
+    <title>Title 1</title>
+    <author>Dude A</author>
+  </book><book isbn="456">
+    <title>Title 2</title>
+    <author>Dude B</author>
+  </book>
+</books>
