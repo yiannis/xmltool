@@ -65,17 +65,25 @@ impl Counters {
     }
 }
 
+enum ParserState {
+    Node,
+    Item,
+    Header,
+    Footer,
+}
+
 struct XMLSource<R> {
     reader: Reader<BufReader<R>>,
     file:   File,
 
-    last_event_pos: usize,
-    last_item_pos:  usize,
-    current_pos:    usize,
+    current_pos: u64,
+    end_pos:     u64,
+
+    is_first_item: bool,
 
     parent_name: String,
 
-    _buf:    Vec<u8>,
+    _buf: Vec<u8>,
 }
 
 impl XMLSource<File> {
@@ -83,13 +91,17 @@ impl XMLSource<File> {
         let xml = File::open(&file_path).unwrap();
         let xml = BufReader::new(xml);
 
+        let f = File::open(&file_path).unwrap();
+        let bytes_total = f.metadata().unwrap().len();
+
         Self {
             reader: Reader::from_reader(xml),
-            file:   File::open(&file_path).unwrap(),
+            file:   f,
 
-            last_event_pos: 0,
-            last_item_pos:  0,
-            current_pos:    0,
+            current_pos: 0,
+            end_pos:     bytes_total-1,
+
+            is_first_item: true,
 
             parent_name: parent_from_nesting(&nesting),
 
@@ -97,17 +109,40 @@ impl XMLSource<File> {
         }
     }
 
-    fn next(&mut self) -> Event {
-        self.last_event_pos = self.reader.buffer_position();
+    fn next(&mut self) -> ParserState {
         self._buf.clear();
 
-        let event = self.reader.read_event_into(&mut self._buf);
+        let event = self.reader.read_event_into(&mut self._buf).unwrap().into_owned();
 
-        self.current_pos = self.reader.buffer_position();
+        self.current_pos = self.reader.buffer_position() as u64;
 
+        self.event_to_item_state(event)
+    }
+
+    fn is_item_start(&self, s: BytesStart) -> bool {
+        str::from_utf8(s.name().as_ref()).unwrap().eq(&self.parent_name)
+    }
+
+    fn event_to_item_state(&mut self, event: Event ) -> ParserState {
         match event {
-            Err(e) => panic!("Error at position {}: {:?}", self.current_pos, e),
-            Ok(e) => e,
+            Event::Eof => ParserState::Footer,
+
+            Event::Start(e) => {
+                if self.is_item_start(e) {
+                    if self.is_first_item {
+                        self.is_first_item = false;
+                        ParserState::Header
+                    }
+                    else {
+                        ParserState::Item
+                    }
+                }
+                else {
+                    ParserState::Node
+                }
+            }
+
+            _ => ParserState::Node,
         }
     }
 
@@ -116,51 +151,26 @@ impl XMLSource<File> {
         let end   = start.to_end().into_owned();
 
         self.reader.read_to_end_into(end.name(), &mut self._buf).unwrap();
-
-        self.current_pos = self.reader.buffer_position();
+        self.current_pos = self.reader.buffer_position() as u64;
     }
 
-    fn header(&mut self) -> Vec<u8> {
-        let mut header = vec![0u8; self.last_event_pos];
-        self.file.seek(SeekFrom::Start(0u64)).unwrap();
-        self.file.read_exact(&mut header[..]).unwrap();
+    fn extract(&mut self, start: u64, end: u64) -> Vec<u8> {
+        let size = end - start;
+        let mut buffer = vec![0u8; size as usize];
 
-        return header;
-    }
+        self.file.seek(SeekFrom::Start(start)).unwrap();
+        self.file.read_exact(&mut buffer[..]).unwrap();
 
-    fn footer(&mut self) -> Vec<u8> {
-        let bytes_total    = self.file.metadata().unwrap().len();
-        let last_item_byte = self.last_item_pos as u64;
-        let size           = (bytes_total-last_item_byte) as usize;
-
-        let mut footer = vec![0u8; size];
-        self.file.seek(SeekFrom::Start(last_item_byte)).unwrap();
-        self.file.read_exact(&mut footer[..]).unwrap();
-
-        return footer;
-    }
-
-    fn item(&mut self) -> Vec<u8> {
-        let start_pos = self.last_event_pos;
-        let end_pos   = self.current_pos;
-
-        let mut item = vec![0u8; end_pos-start_pos];
-
-        self.last_item_pos = end_pos;
-
-        self.file.seek(SeekFrom::Start(start_pos as u64)).unwrap();
-        self.file.read_exact(&mut item[..]).unwrap();
-
-        return item;
+        return buffer;
     }
 }
 
-struct Chunk {
+struct XMLChunk {
     file: File,
     path: std::path::PathBuf,
 }
 
-impl Chunk {
+impl XMLChunk {
     fn new(id: u32) -> Self {
         let path = std::path::PathBuf::from(format!("/tmp/feed.xml.{}", id));
         let file = File::create(&path).unwrap();
@@ -173,34 +183,125 @@ impl Chunk {
     }
 }
 
-type Chunks = Vec<Chunk>;
-// See: http://xion.io/post/code/rust-extension-traits.html
-pub trait ChunkExtention {
-    fn append_xml(self: &mut Self, content: &Vec<u8>);
-    fn append_xml_at(&mut self, chunk_id: u32, content: &Vec<u8>);
-    fn init_at(&mut self, chunk_id: u32);
+struct XMLChunks {
+    list:     Vec<XMLChunk>,
+    counters: Counters,
 }
 
-impl ChunkExtention for Chunks {
-    fn append_xml(&mut self, content: &Vec<u8>) {
-        for f in self.iter_mut() {
-            f.append(content);
+impl XMLChunks {
+    fn new(items_per_chunk: u32) -> Self {
+        let list     = Vec::<XMLChunk>::new();
+        let counters = Counters::new(items_per_chunk);
+
+        Self { list, counters }
+    }
+
+    fn append_bytes_to_all(&mut self, bytes: &Vec<u8>) {
+        for f in self.list.iter_mut() {
+            f.append(&bytes);
         }
     }
 
-    fn append_xml_at(&mut self, chunk_id: u32, content: &Vec<u8>) {
-        self[chunk_id as usize].append(content);
+    fn append_bytes_to_current(&mut self, bytes: &Vec<u8>) {
+        let id = self.counters.chunk_id as usize;
+
+        self.list[id].append(&bytes);
     }
 
-    fn init_at(&mut self, chunk_id: u32) {
-        self.push(Chunk::new(chunk_id));
+    fn new_chunk(&mut self, header: &Vec<u8>) {
+        self.list.push(XMLChunk::new(self.counters.chunk_id));
+        self.append_bytes_to_current(header);
+
+        let id = self.counters.chunk_id as usize;
+        println!(
+            "XMLChunk {} created",
+            self.list[id].path.display()
+        );
     }
 }
 
-fn item_starts(s: BytesStart, nesting: &String) -> bool {
-    let parent = parent_from_nesting(&nesting);
+struct XMLCopySplitter<R> {
+    xml_source: XMLSource<R>,
+    xml_chunks: XMLChunks,
 
-    str::from_utf8(s.name().as_ref()).unwrap().eq(&parent)
+    xml_header: Vec<u8>,
+
+    start_node_source_pos: u64,
+    last_node_source_pos:  u64,
+}
+
+impl XMLCopySplitter<File> {
+    fn new(
+        xml_path: &std::path::PathBuf,
+        max_items: u32,
+        nesting: &String
+    ) -> Self {
+        Self {
+            xml_source: XMLSource::new(xml_path, nesting),
+            xml_chunks: XMLChunks::new(max_items),
+
+            xml_header: Vec::new(),
+
+            start_node_source_pos: 0,
+            last_node_source_pos:  0,
+        }
+    }
+
+    fn run(&mut self) {
+        loop {
+            match self.xml_source.next() {
+                ParserState::Node   => self.handle_node(),
+                ParserState::Item   => self.handle_item(),
+                ParserState::Header => {
+                    self.handle_header();
+                    self.handle_item();
+                }
+                ParserState::Footer => {
+                    self.handle_footer();
+                    break;
+                }
+            }
+        }
+    }
+
+    fn handle_item(&mut self) {
+        self.xml_source.consume_item();
+
+        if self.xml_chunks.counters.item_chunk_id == 0 {
+            self.xml_chunks.new_chunk(&self.xml_header);
+        }
+
+        let next_node_source_pos: u64 = self.xml_source.current_pos;
+        let item = self.xml_source.extract(
+            self.start_node_source_pos,
+            next_node_source_pos,
+        );
+        self.xml_chunks.append_bytes_to_current(&item);
+
+        self.start_node_source_pos = next_node_source_pos;
+
+        self.xml_chunks.counters.update();
+    }
+
+    fn handle_header(&mut self) {
+        self.xml_header = self.xml_source.extract(
+            0,
+            self.last_node_source_pos
+        );
+        self.start_node_source_pos = self.last_node_source_pos;
+    }
+
+    fn handle_footer(&mut self) {
+        let footer = self.xml_source.extract(
+            self.start_node_source_pos,
+            self.xml_source.end_pos,
+        );
+        self.xml_chunks.append_bytes_to_all(&footer);
+    }
+
+    fn handle_node(&mut self) {
+        self.last_node_source_pos = self.xml_source.current_pos;
+    }
 }
 
 fn main() {
@@ -208,8 +309,13 @@ fn main() {
 
     match args.implementation {
         1 => {
-            println!("Running plain text copy version");
-            copy_plain_xml_text_for_each_item( &args.xml_path, args.count, &args.nesting );
+            println!("Running byte copy version");
+
+            XMLCopySplitter::new(
+                &args.xml_path,
+                args.count,
+                &args.nesting
+            ).run();
         }
 
         2 => {
@@ -308,46 +414,4 @@ fn emit_write_event_for_each_read_event(xml: impl BufRead, max_items: u32, nesti
         }
         buf.clear();
     }
-}
-
-fn copy_plain_xml_text_for_each_item(xml_path: &std::path::PathBuf, max_items: u32, nesting: &String) {
-    let mut chunks   = Chunks::new();
-    let mut xml      = XMLSource::new(xml_path, nesting);
-    let mut counters = Counters::new(max_items);
-    let mut header   = vec![0u8; 1];
-
-    loop {
-        match xml.next() {
-            Event::Eof => {
-                let mut footer = xml.footer();
-                chunks.append_xml(&mut footer);
-                break;
-            }
-
-            Event::Start(e) => {
-                if item_starts(e, nesting) {
-                    if counters.item_id == 0 {
-                        header = xml.header();
-                    }
-
-                    if counters.item_chunk_id == 0 {
-                        chunks.init_at(counters.chunk_id);
-                        chunks.append_xml_at(counters.chunk_id, &header);
-                        println!("Chunk {} created", chunks[counters.chunk_id as usize].path.display());
-                    }
-
-                    xml.consume_item();
-
-                    let item = xml.item();
-                    chunks.append_xml_at(counters.chunk_id, &item);
-
-                    counters.update();
-                }
-            }
-
-            _ => (),
-        }
-    }
-
-
 }
