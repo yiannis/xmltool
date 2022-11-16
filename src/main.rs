@@ -294,7 +294,7 @@ impl XMLCopySplitter<File> {
     fn handle_footer(&mut self) {
         let footer = self.xml_source.extract(
             self.start_node_source_pos,
-            self.xml_source.end_pos,
+            self.xml_source.end_pos + 1,
         );
         self.xml_chunks.append_bytes_to_all(&footer);
     }

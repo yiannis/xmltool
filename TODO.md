@@ -13,7 +13,7 @@
 
 #### XML Split command
 - [ ] Add output path option
-- [X] Preserve whitespace formatting
+- [X] Preserve whitespace formatting (almost?)
 - [ ] Read from .gz file
 - [ ] Convert to utf-8
 
@@ -29,6 +29,13 @@
 * TODO:
  - Match parent element with full nesting string
 
+### BUGS
+
+#### Too many open files
+```
+XMLChunk /tmp/feed.xml.250 created
+thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: Os { code: 24, kind: Uncategorized, message: "Too many open files" }', src/main.rs:176:40
+```
 ### Performance
 
 #### Small improvements
