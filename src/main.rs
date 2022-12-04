@@ -15,7 +15,7 @@ use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 
 #[derive(Parser)]
-struct Opt {
+struct Options {
     xml_path: std::path::PathBuf,
 
     #[arg(short, long)]
@@ -305,7 +305,7 @@ impl XMLCopySplitter<File> {
 }
 
 fn main() {
-    let args = Opt::parse();
+    let args = Options::parse();
 
     match args.implementation {
         1 => {
