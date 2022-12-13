@@ -183,6 +183,12 @@ impl XMLChunk {
     }
 }
 
+impl Drop for XMLChunk {
+    fn drop(&mut self) {
+        println!("Dropping file");//self.path.into_os_string());
+    }
+}
+
 struct XMLChunks {
     list:     Vec<XMLChunk>,
     counters: Counters,
