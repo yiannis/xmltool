@@ -4,6 +4,7 @@ use std::io::Seek;
 use std::io::Read;
 use std::io::Write;
 use std::io::BufReader;
+use std::io::BufWriter;
 use std::io::SeekFrom;
 use std::fs::File;
 use std::process;
@@ -340,7 +341,7 @@ fn emit_write_event_for_each_read_event(xml: impl BufRead, max_items: u32, nesti
     reader.trim_text(true);
 
     let mut chunk_file = String::from("/dev/null");
-    let mut writer = Writer::new(File::open(chunk_file).unwrap());
+    let mut writer = Writer::new(BufWriter::new(File::open(chunk_file).unwrap()));
 
     let items_per_chunk = max_items;
     let mut chunk_id = 0;
@@ -361,7 +362,7 @@ fn emit_write_event_for_each_read_event(xml: impl BufRead, max_items: u32, nesti
                         if item_chunk_id == 0 {
                             chunk_file = format!("/tmp/feed.xml.{}", chunk_id);
                             println!("Chunk: {}|{} - {}", chunk_id, item_id, chunk_file);
-                            writer = Writer::new(File::create(chunk_file).unwrap());
+                            writer = Writer::new(BufWriter::new(File::create(chunk_file).unwrap()));
                             writer.write_event(Event::Start(BytesStart::new(&root))).unwrap();
                         }
 
